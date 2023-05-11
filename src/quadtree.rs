@@ -1,5 +1,4 @@
 pub struct Quadtree<T> {
-    bounds: Rect,
     inner: Node<T>,
 }
 impl<T> Quadtree<T>
@@ -10,11 +9,9 @@ where
     where
         C: Into<Coordinate>,
     {
-        let bounds = [lower_left_bound.into(), upper_right_bound.into()];
         Quadtree {
-            bounds,
             inner: Node::Leaf(LeafNode {
-                bounds,
+                bounds: [lower_left_bound.into(), upper_right_bound.into()],
                 value: T::default(),
             }),
         }
