@@ -49,11 +49,30 @@ where
     }
 }
 
-impl<T> Quadtree<T>
-where
-    T: Into<bool>,
-{
-    // pub fn as_str(&self) ->
+impl<T> Quadtree<T> {
+    pub fn to_string<F: Fn(&T) -> char>(&self, repr: F) -> String {
+        let mut output = String::new();
+        let bounds = self.inner.get_bounds();
+        let width = (bounds[1].0 - bounds[0].0 + 1) as usize;
+        output.push('\u{250F}');
+        for _ in 0..width {
+            output.push('\u{2501}');
+        }
+        output.push_str("\u{2513}\n\u{2503}");
+        for (i, item) in self.iter().enumerate() {
+            if i % width == 0 && i > 0 {
+                output.push_str("\u{2503}\n\u{2503}");
+            }
+            output.push(repr(item));
+        }
+        output.push_str("\u{2503}\n\u{2517}");
+        for _ in 0..width {
+            output.push('\u{2501}');
+        }
+        output.push('\u{251B}');
+
+        output
+    }
 }
 
 pub struct QuadtreeIter<'a, T> {
@@ -69,7 +88,6 @@ impl<'a, T> Iterator for QuadtreeIter<'a, T> {
         }
         let value = self.inner.get(self.counter);
         let [upper_left, lower_right] = self.inner.inner.get_bounds();
-        dbg!(self.counter, upper_left, lower_right);
         if self.counter == *lower_right {
             self.finished = true;
         } else if self.counter.0 == lower_right.0 {
@@ -364,6 +382,11 @@ mod tests {
             ]
         );
         println!("{:?}", v);
+        println!(
+            "{}",
+            qtree.to_string(|item| if *item { '\u{2588}' } else { ' ' })
+        );
+        assert!(false);
     }
 
     #[test]
