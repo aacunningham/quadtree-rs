@@ -1,9 +1,25 @@
 pub struct Quadtree<T> {
     inner: Node<T>,
 }
+impl<T> Quadtree<T> {
+    pub fn get<C>(&self, point: C) -> Option<&T>
+    where
+        C: Into<Coordinate>,
+    {
+        self.inner.read_value(point.into())
+    }
+
+    pub fn iter(&self) -> QuadtreeIter<'_, T> {
+        QuadtreeIter {
+            inner: self,
+            counter: self.inner.get_bounds()[0],
+            finished: false,
+        }
+    }
+}
 impl<T> Quadtree<T>
 where
-    T: Default + Copy + PartialEq + std::fmt::Debug,
+    T: Default,
 {
     pub fn new<C>(upper_left_bound: C, lower_right_bound: C) -> Self
     where
@@ -16,7 +32,11 @@ where
             }),
         }
     }
-
+}
+impl<T> Quadtree<T>
+where
+    T: Copy + PartialEq,
+{
     pub fn insert<C>(&mut self, value: T, point: C)
     where
         C: Into<Coordinate>,
@@ -24,24 +44,16 @@ where
         self.inner.insert_value(value, point.into());
     }
 
-    pub fn get<C>(&self, point: C) -> &T
-    where
-        C: Into<Coordinate>,
-    {
-        self.inner.read_value(point.into())
-    }
-
     pub fn insert_rect(&mut self, value: T, rect: &Rect) {
         self.inner.insert_value_range(value, rect);
     }
+}
 
-    pub fn iter(&self) -> QuadtreeIter<'_, T> {
-        QuadtreeIter {
-            inner: self,
-            counter: self.inner.get_bounds()[0],
-            finished: false,
-        }
-    }
+impl<T> Quadtree<T>
+where
+    T: Into<bool>,
+{
+    // pub fn as_str(&self) ->
 }
 
 pub struct QuadtreeIter<'a, T> {
@@ -49,10 +61,7 @@ pub struct QuadtreeIter<'a, T> {
     counter: Coordinate,
     finished: bool,
 }
-impl<'a, T> Iterator for QuadtreeIter<'a, T>
-where
-    T: Default + Copy + PartialEq + std::fmt::Debug,
-{
+impl<'a, T> Iterator for QuadtreeIter<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
@@ -68,7 +77,7 @@ where
         } else {
             self.counter.0 += 1;
         }
-        Some(value)
+        value
     }
 }
 
@@ -77,10 +86,7 @@ enum Node<T> {
     Leaf(LeafNode<T>),
     Quad(QuadNode<T>),
 }
-impl<T> Node<T>
-where
-    T: Copy + PartialEq + std::fmt::Debug,
-{
+impl<T> Node<T> {
     fn is_leaf(&self) -> bool {
         matches!(self, Self::Leaf(_))
     }
@@ -103,21 +109,35 @@ where
         }
     }
 
+    fn get_bounds(&self) -> &Rect {
+        match self {
+            Self::Leaf(LeafNode { bounds, .. }) => bounds,
+            Self::Quad(QuadNode { bounds, .. }) => bounds,
+        }
+    }
+
+    fn contains(&self, point: Coordinate) -> bool {
+        let bounds = self.get_bounds();
+        bounds[0].0 <= point.0
+            && point.0 <= bounds[1].0
+            && bounds[0].1 <= point.1
+            && point.1 <= bounds[1].1
+    }
+
+    fn read_value(&self, point: Coordinate) -> Option<&T> {
+        match self {
+            Self::Leaf(LeafNode { value, .. }) => Some(value),
+            Self::Quad(QuadNode { nodes, .. }) => nodes
+                .into_iter()
+                .find(|n| n.contains(point))
+                .and_then(|node| node.read_value(point)),
+        }
+    }
+
     fn get_value(&self) -> &T {
         match self {
             Self::Leaf(LeafNode { value, .. }) => value,
             _ => panic!(),
-        }
-    }
-
-    fn read_value(&self, point: Coordinate) -> &T {
-        match self {
-            Self::Leaf(LeafNode { value, .. }) => value,
-            Self::Quad(QuadNode { nodes, .. }) => nodes
-                .into_iter()
-                .find(|n| n.contains(point))
-                .unwrap()
-                .read_value(point),
         }
     }
 
@@ -141,22 +161,11 @@ where
             _ => panic!(),
         }
     }
-
-    fn get_bounds(&self) -> &Rect {
-        match self {
-            Self::Leaf(LeafNode { bounds, .. }) => bounds,
-            Self::Quad(QuadNode { bounds, .. }) => bounds,
-        }
-    }
-
-    fn contains(&self, point: Coordinate) -> bool {
-        let bounds = self.get_bounds();
-        bounds[0].0 <= point.0
-            && point.0 <= bounds[1].0
-            && bounds[0].1 <= point.1
-            && point.1 <= bounds[1].1
-    }
-
+}
+impl<T> Node<T>
+where
+    T: Copy + PartialEq,
+{
     fn split(&mut self) {
         if self.is_quad() {
             return;
@@ -198,19 +207,23 @@ where
         });
     }
 
-    fn insert_value(&mut self, value: T, point: Coordinate) -> bool {
+    fn insert_value(&mut self, value: T, point: Coordinate) {
         let bounds = self.get_bounds();
         if point == bounds[0] && point == bounds[1] {
             *self.get_value_mut() = value;
-            return true;
+            return;
         }
+
         self.split();
         let is_leaf = self
             .get_nodes_mut()
             .into_iter()
             .find(|n| n.contains(point))
-            .unwrap()
-            .insert_value(value, point);
+            .map(|n| {
+                n.insert_value(value, point);
+                n.is_leaf()
+            })
+            .unwrap();
         if is_leaf
             && self
                 .get_nodes()
@@ -219,7 +232,6 @@ where
         {
             self.consolidate();
         }
-        self.is_leaf()
     }
 
     fn insert_value_range(&mut self, value: T, bounds: &Rect) -> bool {
@@ -335,7 +347,7 @@ mod tests {
     #[test]
     fn quadtree_can_be_created() {
         let qtree: Quadtree<bool> = Quadtree::new((0, 0), (8, 8));
-        assert!(!*qtree.get((0, 0)));
+        assert_eq!(qtree.get((0, 0)), Some(&false));
     }
 
     #[test]
@@ -385,7 +397,7 @@ mod tests {
             let y = i as isize / width;
             quadtree.insert(*p, (x, y));
         }
-        assert_eq!(quadtree.get((0, 0)), &Pixel::new(0, 0, 0, 255));
+        assert_eq!(quadtree.get((0, 0)), Some(&Pixel::new(0, 0, 0, 255)));
     }
 
     mod nodes {
@@ -467,7 +479,7 @@ mod tests {
                 value: 0,
             });
             node.insert_value(1, Coordinate(1, 1));
-            assert_eq!(node.read_value(Coordinate(1, 1)), &1);
+            assert_eq!(node.read_value(Coordinate(1, 1)), Some(&1));
         }
 
         #[test]
@@ -477,10 +489,10 @@ mod tests {
                 value: 0,
             });
             node.insert_value(1, Coordinate(1, 1));
-            assert_eq!(node.read_value(Coordinate(1, 1)), &1);
-            assert_eq!(node.read_value(Coordinate(1, 2)), &0);
-            assert_eq!(node.read_value(Coordinate(2, 1)), &0);
-            assert_eq!(node.read_value(Coordinate(2, 2)), &0);
+            assert_eq!(node.read_value(Coordinate(1, 1)), Some(&1));
+            assert_eq!(node.read_value(Coordinate(1, 2)), Some(&0));
+            assert_eq!(node.read_value(Coordinate(2, 1)), Some(&0));
+            assert_eq!(node.read_value(Coordinate(2, 2)), Some(&0));
         }
 
         #[test]
@@ -504,7 +516,7 @@ mod tests {
                 value: 0,
             });
             node.insert_value_range(1, &[Coordinate(1, 1), Coordinate(1, 1)]);
-            assert_eq!(node.read_value(Coordinate(1, 1)), &1);
+            assert_eq!(node.read_value(Coordinate(1, 1)), Some(&1));
         }
 
         #[test]
@@ -514,10 +526,10 @@ mod tests {
                 value: false,
             });
             node.insert_value_range(true, &[Coordinate(1, 1), Coordinate(1, 1)]);
-            assert_eq!(node.read_value(Coordinate(1, 1)), &true);
-            assert_eq!(node.read_value(Coordinate(1, 2)), &false);
-            assert_eq!(node.read_value(Coordinate(2, 1)), &false);
-            assert_eq!(node.read_value(Coordinate(2, 2)), &false);
+            assert_eq!(node.read_value(Coordinate(1, 1)), Some(&true));
+            assert_eq!(node.read_value(Coordinate(1, 2)), Some(&false));
+            assert_eq!(node.read_value(Coordinate(2, 1)), Some(&false));
+            assert_eq!(node.read_value(Coordinate(2, 2)), Some(&false));
         }
 
         #[test]
