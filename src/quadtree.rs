@@ -3,15 +3,15 @@ pub struct Quadtree<T> {
 }
 impl<T> Quadtree<T>
 where
-    T: Default + Copy + PartialEq,
+    T: Default + Copy + PartialEq + std::fmt::Debug,
 {
-    pub fn new<C>(lower_left_bound: C, upper_right_bound: C) -> Self
+    pub fn new<C>(upper_left_bound: C, lower_right_bound: C) -> Self
     where
         C: Into<Coordinate>,
     {
         Quadtree {
             inner: Node::Leaf(LeafNode {
-                bounds: [lower_left_bound.into(), upper_right_bound.into()],
+                bounds: [upper_left_bound.into(), lower_right_bound.into()],
                 value: T::default(),
             }),
         }
@@ -34,6 +34,42 @@ where
     pub fn insert_rect(&mut self, value: T, rect: &Rect) {
         self.inner.insert_value_range(value, rect);
     }
+
+    pub fn iter(&self) -> QuadtreeIter<'_, T> {
+        QuadtreeIter {
+            inner: self,
+            counter: self.inner.get_bounds()[0],
+            finished: false,
+        }
+    }
+}
+
+pub struct QuadtreeIter<'a, T> {
+    inner: &'a Quadtree<T>,
+    counter: Coordinate,
+    finished: bool,
+}
+impl<'a, T> Iterator for QuadtreeIter<'a, T>
+where
+    T: Default + Copy + PartialEq + std::fmt::Debug,
+{
+    type Item = &'a T;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        let value = self.inner.get(self.counter);
+        let [upper_left, lower_right] = self.inner.inner.get_bounds();
+        dbg!(self.counter, upper_left, lower_right);
+        if self.counter == *lower_right {
+            self.finished = true;
+        } else if self.counter.0 == lower_right.0 {
+            self.counter = Coordinate(upper_left.0, self.counter.1 + 1)
+        } else {
+            self.counter.0 += 1;
+        }
+        Some(value)
+    }
 }
 
 #[derive(Debug)]
@@ -43,7 +79,7 @@ enum Node<T> {
 }
 impl<T> Node<T>
 where
-    T: Copy + PartialEq,
+    T: Copy + PartialEq + std::fmt::Debug,
 {
     fn is_leaf(&self) -> bool {
         matches!(self, Self::Leaf(_))
@@ -224,16 +260,16 @@ struct QuadNode<T> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Coordinate(u32, u32);
-impl From<(u32, u32)> for Coordinate {
-    fn from(value: (u32, u32)) -> Self {
+pub struct Coordinate(isize, isize);
+impl From<(isize, isize)> for Coordinate {
+    fn from(value: (isize, isize)) -> Self {
         Self(value.0, value.1)
     }
 }
 
 type Rect = [Coordinate; 2];
 
-fn split_rect(bounds: &Rect, h_mid: u32, v_mid: u32) -> Vec<Rect> {
+fn split_rect(bounds: &Rect, h_mid: isize, v_mid: isize) -> Vec<Rect> {
     let corners = [
         bounds[0],
         Coordinate(bounds[1].0, bounds[0].1),
@@ -270,15 +306,15 @@ fn split_rect(bounds: &Rect, h_mid: u32, v_mid: u32) -> Vec<Rect> {
 
 fn rect_intersection(left: &Rect, right: &Rect) -> Option<Rect> {
     let x_range = (
-        u32::max(left[0].0, right[0].0),
-        u32::min(left[1].0, right[1].0),
+        isize::max(left[0].0, right[0].0),
+        isize::min(left[1].0, right[1].0),
     );
     if x_range.0 > x_range.1 {
         return None;
     }
     let y_range = (
-        u32::max(left[0].1, right[0].1),
-        u32::min(left[1].1, right[1].1),
+        isize::max(left[0].1, right[0].1),
+        isize::min(left[1].1, right[1].1),
     );
     if y_range.0 > y_range.1 {
         return None;
@@ -291,12 +327,65 @@ fn rect_intersection(left: &Rect, right: &Rect) -> Option<Rect> {
 
 #[cfg(test)]
 mod tests {
-    use super::Quadtree;
+    use std::fs::{read, write};
+
+    use super::{Coordinate, Quadtree};
+    use simple_png::{encode, Pixel, PNG};
 
     #[test]
     fn quadtree_can_be_created() {
         let qtree: Quadtree<bool> = Quadtree::new((0, 0), (8, 8));
         assert!(!*qtree.get((0, 0)));
+    }
+
+    #[test]
+    fn quadtree_can_be_iterated() {
+        let mut qtree: Quadtree<bool> = Quadtree::new((1, 1), (4, 4));
+        qtree.insert_rect(true, &[Coordinate(1, 3), Coordinate(4, 4)]);
+        qtree.insert(false, Coordinate(4, 4));
+        let v: Vec<_> = qtree.iter().cloned().collect();
+        assert_eq!(
+            v,
+            [
+                false, false, false, false, false, false, false, false, true, true, true, true,
+                true, true, true, false
+            ]
+        );
+        println!("{:?}", v);
+    }
+
+    #[test]
+    fn quadtree_makes_an_image() {
+        let mut qtree: Quadtree<bool> = Quadtree::new((0, 0), (255, 255));
+        qtree.insert_rect(true, &[Coordinate(0, 100), Coordinate(255, 255)]);
+        qtree.insert_rect(false, &[Coordinate(200, 200), Coordinate(255, 255)]);
+        let pixels: Vec<_> = qtree
+            .iter()
+            .map(|&v| {
+                if v {
+                    Pixel::new(255, 255, 255, 255)
+                } else {
+                    Pixel::new(0, 0, 0, 255)
+                }
+            })
+            .collect();
+        let bytes = encode(256, 256, &pixels);
+        write("testfile.png", bytes).unwrap();
+    }
+
+    #[test]
+    fn quadtree_can_store_an_image() {
+        let data = read("test-2.png").unwrap();
+        let image = PNG::from_bytes(&data).unwrap();
+        let width = image.header.width as isize;
+        let height = image.header.height as isize;
+        let mut quadtree = Quadtree::new((0, 0), (width - 1, height - 1));
+        for (i, p) in image.pixels.iter().enumerate() {
+            let x = i as isize % width;
+            let y = i as isize / width;
+            quadtree.insert(*p, (x, y));
+        }
+        assert_eq!(quadtree.get((0, 0)), &Pixel::new(0, 0, 0, 255));
     }
 
     mod nodes {
